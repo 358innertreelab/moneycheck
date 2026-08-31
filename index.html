@@ -188,9 +188,7 @@
 </div>
 
 <script>
-  // ⚠️ 請在此處貼上你在 Google Apps Script 部署取得的「網頁應用程式網址」
   const API_URL = "https://script.google.com/macros/s/AKfycbzwOaxqF8kvPUmsDCQW8IWl-2GEPJE8ZbVOygqz20HN7dlT9aXvaOeBBmUH9LLRQw40/exec";
-
   const MEMBERS = ['Sunny', 'Ariel', 'Mark', 'Hermes', 'CY', 'Jim', 'Shawn', 'Allen'];
   
   let currentRecords = [];
@@ -261,20 +259,14 @@
     updateCalculatedTotal();
   }
 
-  // 從 Google Sheets 抓取最新資料
   async function fetchCloudData() {
-    if (!API_URL || API_URL.includes("YOUR_GOOGLE_APPS_SCRIPT")) {
-      alert("請先將 HTML 內的 API_URL 替換為你的 Google Apps Script 部署網址！");
-      return;
-    }
-
     showLoading(true);
     try {
       const res = await fetch(API_URL);
       const data = await res.json();
       if (data.status === 'success') {
-        currentRecords = data.records;
-        currentLogs = data.logs;
+        currentRecords = data.records || [];
+        currentLogs = data.logs || [];
         render();
       }
     } catch (err) {
@@ -285,26 +277,49 @@
   }
 
   function render() {
-    // 1. 計算累積欠款與應收
+    // 1. 初始化每個人餘額為 0
     const balances = {};
     MEMBERS.forEach(m => balances[m] = 0);
 
     currentRecords.forEach(rec => {
-      balances[rec.payer] += rec.totalAmount;
-      Object.entries(rec.items).forEach(([member, amount]) => {
-        balances[member] -= amount;
-      });
+      const total = Number(rec.totalAmount) || 0;
+      const payer = (rec.payer || '').trim();
+
+      if (balances.hasOwnProperty(payer)) {
+        balances[payer] += total;
+      }
+
+      if (rec.items) {
+        let itemsObj = rec.items;
+        if (typeof itemsObj === 'string') {
+          try { itemsObj = JSON.parse(itemsObj); } catch(e) { itemsObj = {}; }
+        }
+
+        Object.entries(itemsObj).forEach(([member, amount]) => {
+          const m = (member || '').trim();
+          const amt = Number(amount) || 0;
+          if (balances.hasOwnProperty(m)) {
+            balances[m] -= amt;
+          }
+        });
+      }
     });
 
+    // 渲染累積欠款與應收
     const balanceListEl = document.getElementById('balanceList');
     balanceListEl.innerHTML = MEMBERS.map(m => {
-      const bal = Math.round(balances[m]);
+      const rawBal = balances[m];
+      const bal = isNaN(rawBal) ? 0 : Math.round(rawBal);
+      
       let cls = 'zero', text = '已結清 (0)';
       if (bal > 0) {
-        cls = 'positive'; text = `應收 +${bal} 元`;
+        cls = 'positive'; 
+        text = `應收 +${bal} 元`;
       } else if (bal < 0) {
-        cls = 'negative'; text = `累積欠款 ${Math.abs(bal)} 元 (應付)`;
+        cls = 'negative'; 
+        text = `累積欠款 ${Math.abs(bal)} 元 (應付)`;
       }
+
       return `
         <li class="balance-item">
           <span><strong>${m}</strong></span>
@@ -313,13 +328,18 @@
       `;
     }).join('');
 
-    // 2. 消費明細表格
+    // 2. 渲染消費明細表格
     const tableBody = document.getElementById('historyTableBody');
-    if (currentRecords.length === 0) {
+    if (!currentRecords || currentRecords.length === 0) {
       tableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">尚無消費紀錄</td></tr>';
     } else {
       tableBody.innerHTML = currentRecords.map(rec => {
-        const detailsStr = Object.entries(rec.items).map(([m, amt]) => `${m}: $${amt}`).join(', ');
+        let itemsObj = rec.items;
+        if (typeof itemsObj === 'string') {
+          try { itemsObj = JSON.parse(itemsObj); } catch(e) { itemsObj = {}; }
+        }
+        const detailsStr = Object.entries(itemsObj || {}).map(([m, amt]) => `${m}: $${amt}`).join(', ');
+        
         return `
           <tr>
             <td>${formatTime(rec.timestamp)}</td>
@@ -336,9 +356,9 @@
       }).reverse().join('');
     }
 
-    // 3. 稽核日誌表格
+    // 3. 渲染稽核日誌表格
     const logsBody = document.getElementById('logsTableBody');
-    if (currentLogs.length === 0) {
+    if (!currentLogs || currentLogs.length === 0) {
       logsBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">尚無操作紀錄</td></tr>';
     } else {
       logsBody.innerHTML = currentLogs.map(log => {
@@ -412,10 +432,16 @@
     try {
       await fetch(API_URL, {
         method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      
       resetForm();
-      await fetchCloudData();
+      // 等待 1.5 秒讓 Google Sheets 寫入完成後重新抓取
+      setTimeout(async () => {
+        await fetchCloudData();
+      }, 1500);
     } catch (err) {
       alert('同步至 Google Sheets 失敗：' + err.message);
     } finally {
@@ -437,7 +463,6 @@
     pendingDeleteTarget = null;
   }
 
-  // 刪除紀錄並同步至 Google Sheets
   async function confirmDelete() {
     if (!pendingDeleteTarget) return;
 
@@ -460,10 +485,15 @@
     try {
       await fetch(API_URL, {
         method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(payload)
       });
+      
       closeDeleteModal();
-      await fetchCloudData();
+      setTimeout(async () => {
+        await fetchCloudData();
+      }, 1500);
     } catch (err) {
       alert('刪除失敗：' + err.message);
     } finally {
@@ -472,6 +502,7 @@
     }
   }
 
+  // 初始化
   initUI();
   fetchCloudData();
 </script>
