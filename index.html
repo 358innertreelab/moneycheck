@@ -71,6 +71,11 @@
     .badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 0.75rem; font-weight: 600; }
     .badge-add { background: #dcfce7; color: #166534; }
     .badge-delete { background: #fee2e2; color: #991b1b; }
+    .badge-topup { background: #fef3c7; color: #92400e; }
+    .btn-topup { background: #d97706; }
+    .btn-topup:hover { background: #b45309; }
+    .topup-grid { display: grid; grid-template-columns: 1fr; gap: 0 14px; }
+    @media (min-width: 768px) { .topup-grid { grid-template-columns: repeat(4, 1fr); } }
 
     .loading-banner {
       display: none; background: #e0e7ff; color: #3730a3; padding: 8px 12px; border-radius: 6px; margin-bottom: 16px; font-size: 0.9rem; text-align: center;
@@ -131,6 +136,36 @@
       <ul class="balance-list" id="balanceList"></ul>
     </section>
   </div>
+
+  <section class="card">
+    <h2>💰 儲值 / 還款</h2>
+    <p style="font-size: 0.85rem; color: var(--text-muted); margin-bottom: 12px;">成員把錢交給收款人時記錄在這裡：儲值人的餘額增加，收款人的餘額相應減少。</p>
+    <form id="topupForm">
+      <div class="topup-grid">
+        <div class="form-group">
+          <label for="topupMember">儲值人</label>
+          <select id="topupMember" required></select>
+        </div>
+        <div class="form-group">
+          <label for="topupReceiver">收款人</label>
+          <select id="topupReceiver" required></select>
+        </div>
+        <div class="form-group">
+          <label for="topupAmount">金額</label>
+          <input type="number" id="topupAmount" placeholder="輸入金額" min="1" step="1" required>
+        </div>
+        <div class="form-group">
+          <label for="topupOperator">✍️ 操作記錄人</label>
+          <select id="topupOperator" class="highlight-select" required></select>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="topupNote">備註（選填）</label>
+        <input type="text" id="topupNote" placeholder="例如：預存 11 月飲料錢">
+      </div>
+      <button type="submit" id="topupBtn" class="btn-topup">確認儲值並同步雲端</button>
+    </form>
+  </section>
 
   <section class="card">
     <h2>現存消費明細</h2>
@@ -194,6 +229,7 @@
   let currentRecords = [];
   let currentLogs = [];
   let pendingDeleteTarget = null;
+  const TOPUP_PREFIX = '💰 儲值';
 
   function formatTime(timestamp) {
     const d = new Date(Number(timestamp));
@@ -215,6 +251,12 @@
 
     document.getElementById('deleteOperator').innerHTML = options;
     document.getElementById('deleteOperator').value = 'CY';
+
+    document.getElementById('topupMember').innerHTML = options;
+    document.getElementById('topupReceiver').innerHTML = options;
+    document.getElementById('topupReceiver').value = 'CY';
+    document.getElementById('topupOperator').innerHTML = options;
+    document.getElementById('topupOperator').value = 'CY';
 
     const list = document.getElementById('memberAmountList');
     list.innerHTML = MEMBERS.map(m => `
@@ -340,12 +382,18 @@
         if (typeof itemsObj === 'string') {
           try { itemsObj = JSON.parse(itemsObj); } catch(e) { itemsObj = {}; }
         }
-        const detailsStr = Object.entries(itemsObj || {}).map(([m, amt]) => `${m}: $${amt}`).join(', ');
+        const isTopup = String(rec.desc || '').startsWith(TOPUP_PREFIX);
+        const detailsStr = isTopup
+          ? `${rec.payer} → ${Object.keys(itemsObj || {}).join(', ')}`
+          : Object.entries(itemsObj || {}).map(([m, amt]) => `${m}: $${amt}`).join(', ');
+        const descHtml = isTopup
+          ? `<span class="badge badge-topup">儲值</span> <strong>${rec.desc.slice(TOPUP_PREFIX.length).replace(/^：/, '')}</strong>`
+          : `<strong>${rec.desc}</strong>`;
         
         return `
           <tr>
             <td>${formatTime(rec.timestamp)}</td>
-            <td><strong>${rec.desc}</strong></td>
+            <td>${descHtml}</td>
             <td>$${rec.totalAmount}</td>
             <td>${rec.payer}</td>
             <td style="font-size: 0.85rem; color: #334155;">${detailsStr}</td>
@@ -365,8 +413,9 @@
     } else {
       logsBody.innerHTML = currentLogs.map(log => {
         const isAdd = log.action === 'CREATE';
-        const badgeClass = isAdd ? 'badge-add' : 'badge-delete';
-        const actionName = isAdd ? '新增紀錄' : '刪除紀錄';
+        const isTopupLog = isAdd && String(log.detail || '').startsWith('儲值');
+        const badgeClass = isTopupLog ? 'badge-topup' : (isAdd ? 'badge-add' : 'badge-delete');
+        const actionName = isTopupLog ? '儲值' : (isAdd ? '新增紀錄' : '刪除紀錄');
         return `
           <tr>
             <td>${formatTime(log.timestamp)}</td>
@@ -448,6 +497,70 @@
       alert('同步至 Google Sheets 失敗：' + err.message);
     } finally {
       submitBtn.disabled = false;
+      showLoading(false);
+    }
+  });
+
+  // 儲值：以「儲值人代墊、收款人應付」的方式記錄，沿用既有的雲端欄位
+  document.getElementById('topupForm').addEventListener('submit', async function(e) {
+    e.preventDefault();
+
+    const member = document.getElementById('topupMember').value;
+    const receiver = document.getElementById('topupReceiver').value;
+    const operator = document.getElementById('topupOperator').value;
+    const amount = parseFloat(document.getElementById('topupAmount').value);
+    const note = document.getElementById('topupNote').value.trim();
+
+    if (member === receiver) {
+      alert('儲值人與收款人不能是同一人！');
+      return;
+    }
+    if (isNaN(amount) || amount <= 0) {
+      alert('請輸入有效的儲值金額！');
+      return;
+    }
+
+    const btn = document.getElementById('topupBtn');
+    btn.disabled = true;
+    showLoading(true);
+
+    const now = Date.now();
+    const desc = note ? `${TOPUP_PREFIX}：${note}` : TOPUP_PREFIX;
+    const payload = {
+      action: 'CREATE',
+      record: {
+        id: String(now),
+        timestamp: now,
+        desc,
+        payer: member,
+        items: { [receiver]: amount },
+        totalAmount: amount,
+        recorder: operator
+      },
+      log: {
+        timestamp: now,
+        action: 'CREATE',
+        operator: operator,
+        detail: `儲值：${member} 交給 ${receiver} $${amount}${note ? `（${note}）` : ''}`
+      }
+    };
+
+    try {
+      await fetch(API_URL, {
+        method: 'POST',
+        mode: 'no-cors',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(payload)
+      });
+      document.getElementById('topupAmount').value = '';
+      document.getElementById('topupNote').value = '';
+      setTimeout(async () => {
+        await fetchCloudData();
+      }, 1500);
+    } catch (err) {
+      alert('儲值同步失敗：' + err.message);
+    } finally {
+      btn.disabled = false;
       showLoading(false);
     }
   });
