@@ -189,7 +189,7 @@
 
 <script>
   const API_URL = "https://script.google.com/macros/s/AKfycbzwOaxqF8kvPUmsDCQW8IWl-2GEPJE8ZbVOygqz20HN7dlT9aXvaOeBBmUH9LLRQw40/exec";
-  const MEMBERS = ['Sunny', 'Ariel', 'Mark', 'Hermes', 'CY', 'Jim', 'Shawn', 'Allen'];
+  const MEMBERS = ['Sunny', 'Ariel', 'Mark', 'Hermes', 'CY', 'Jim', 'Shawn', 'Allen', 'Hank', 'Christy'];
   
   let currentRecords = [];
   let currentLogs = [];
@@ -207,12 +207,14 @@
   function initUI() {
     const options = MEMBERS.map(m => `<option value="${m}">${m}</option>`).join('');
     document.getElementById('recorder').innerHTML = options;
+    document.getElementById('recorder').value = 'CY';
     
     const payerSelect = document.getElementById('payer');
     payerSelect.innerHTML = options;
     payerSelect.value = 'CY';
 
     document.getElementById('deleteOperator').innerHTML = options;
+    document.getElementById('deleteOperator').value = 'CY';
 
     const list = document.getElementById('memberAmountList');
     list.innerHTML = MEMBERS.map(m => `
@@ -277,6 +279,7 @@
   }
 
   function render() {
+    // 1. 初始化每個人餘額為 0
     const balances = {};
     MEMBERS.forEach(m => balances[m] = 0);
 
@@ -304,6 +307,7 @@
       }
     });
 
+    // 渲染累積欠款與應收
     const balanceListEl = document.getElementById('balanceList');
     balanceListEl.innerHTML = MEMBERS.map(m => {
       const rawBal = balances[m];
@@ -326,6 +330,7 @@
       `;
     }).join('');
 
+    // 2. 渲染消費明細表格
     const tableBody = document.getElementById('historyTableBody');
     if (!currentRecords || currentRecords.length === 0) {
       tableBody.innerHTML = '<tr><td colspan="7" style="text-align: center; color: var(--text-muted);">尚無消費紀錄</td></tr>';
@@ -353,6 +358,7 @@
       }).reverse().join('');
     }
 
+    // 3. 渲染稽核日誌表格
     const logsBody = document.getElementById('logsTableBody');
     if (!currentLogs || currentLogs.length === 0) {
       logsBody.innerHTML = '<tr><td colspan="4" style="text-align: center; color: var(--text-muted);">尚無操作紀錄</td></tr>';
@@ -373,6 +379,7 @@
     }
   }
 
+  // 新增紀錄並同步至 Google Sheets
   document.getElementById('recordForm').addEventListener('submit', async function(e) {
     e.preventDefault();
 
@@ -433,6 +440,7 @@
       });
       
       resetForm();
+      // 等待 1.5 秒讓 Google Sheets 寫入完成後重新抓取
       setTimeout(async () => {
         await fetchCloudData();
       }, 1500);
@@ -496,6 +504,7 @@
     }
   }
 
+  // 初始化
   initUI();
   fetchCloudData();
 </script>
